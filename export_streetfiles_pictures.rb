@@ -4,7 +4,6 @@ require 'hpricot'
 BASE_URL = 'http://streetfiles.org/'
 
 def basic_authentication(email, password)
-# trying to authenticate
   puts "Trying to authenticate with data provided.."
   
   response = HTTParty.get(BASE_URL + 'login/')
@@ -26,17 +25,17 @@ def create_streetfiles_folder
   Dir::mkdir("Streetfiles") unless File.exists?("Streetfiles")
 end
 
-def download_images_through_pages(total_pages, folder_name)
+def download_images_through_pages(total_pages, url_prefix, folder_name)
   Dir::mkdir("Streetfiles/#{folder_name}") unless File.exists?("Streetfiles/#{folder_name}")
   total_pages.times do |page_number|
-    response = HTTParty.get(BASE_URL + "my/photos/index/page:#{page_number + 1}", :headers => {'Cookie' => @cookie})
+    response = HTTParty.get(BASE_URL + "my/#{url_prefix}/page:#{page_number + 1}", :headers => {'Cookie' => @cookie})
     if response.success?
       images = Hpricot(response).search("/html/body//img")
       images.each do |image|
         image_attribute = image.get_attribute(:alt).gsub(%r([-/\\!@$#%^&*()+=\]\[~`"';\t :|><,.?<]),'_')
         image_attribute = image_attribute + 'x' while File.exists?("Streetfiles/#{folder_name}/#{image_attribute}.jpg")
         File.open("Streetfiles/#{folder_name}/#{image_attribute}.jpg", "w") do |pic|
-          file_addr = image.get_attribute(:src)#.sub(/\/S\//,'/')
+          file_addr = image.get_attribute(:src).sub(/\/S\//,'/')
           if file_addr.include?(BASE_URL)
             puts "Downloading #{image_attribute} picture.."
             pic.write HTTParty.get(file_addr, :headers => {'Cookie' => @cookie})
@@ -55,6 +54,13 @@ def get_user_name
   puts "Export initializing for #{@user_nickname}.."
 end
 
+def get_total_pages_number(index_url)
+  response = HTTParty.get(BASE_URL + "my/#{index_url}/", :headers => {'Cookie' => @cookie})
+  pagination_elements = Hpricot(response).search(".pageNums//a")[-2]
+  pages_number = !pagination_elements.nil? ? pagination_elements.inner_html.to_i : 1
+  pages_number
+end
+
 if ARGV.size < 3
   puts "Wrong format! Please add download option, your email address and password."
 else
@@ -62,32 +68,32 @@ else
   login_name = ARGV[1]
   login_password = ARGV[2]
 
-  case download_option
-  when "-m"
+  if %w(-m -l -b).include?(download_option)
     basic_authentication(login_name, login_password)
+    create_streetfiles_folder
     get_user_name
 
+    case download_option
+    when "-m"
+      prefix = "photos/index"
 # check how much photos user have at all
-    response = HTTParty.get(BASE_URL + @user_nickname, :headers => {'Cookie' => @cookie})
-    inSideBox_elements = Hpricot(response).search(".inSideBox//p//a")
-    photos_number = inSideBox_elements.first.inner_html[0..-8].to_i # because of "XXX photos"
-    puts "Totally there are #{photos_number} for export.."
-    exit if photos_number == 0
-# usually there just 20 pictures per page in My Photos category.
-    if (1..20).include? photos_number
-      total_pages = 1
-    else
-      total_pages = photos_number % 20 === 0 ? photos_number / 20 : photos_number / 20 + 1
-    end
+      response = HTTParty.get(BASE_URL + @user_nickname, :headers => {'Cookie' => @cookie})
+      inSideBox_elements = Hpricot(response).search(".inSideBox//p//a")
+      photos_number = inSideBox_elements.first.inner_html[0..-8].to_i # because of "XXX photos"
+      puts "Totally there are #{photos_number} for export.."
+      exit if photos_number == 0
 
-    total_pages = 1
-    
-    create_streetfiles_folder
-    download_images_through_pages(total_pages, "Mine")
-  when "-l"
-    exit 
-  when "-b"
-    exit
+      total_pages = get_total_pages_number(prefix)
+      download_images_through_pages(total_pages, prefix, "Mine")
+    when "-l"
+      prefix = "activities/loves"
+      total_pages = get_total_pages_number(prefix)
+      download_images_through_pages(total_pages, prefix, "Loved")
+    when "-b"
+      prefix = "activities/bookmarks"
+      total_pages = get_total_pages_number(prefix)
+      download_images_through_pages(total_pages, prefix, "Bookmarks")
+    end
   else
     puts "Wrong download option was specified. Please use:\n -m : to download just your photos\n -l : to download your loved photos\n -b : to download your bookmarks."
   end
